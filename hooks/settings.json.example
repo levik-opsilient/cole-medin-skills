@@ -51,6 +51,20 @@
       }
     ],
 
+    "PostToolUseFailure": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run ${CLAUDE_PROJECT_DIR}/.claude/hooks/post_tool_use_log.py",
+            "timeout": 15,
+            "async": true
+          }
+        ]
+      }
+    ],
+
     "Stop": [
       {
         "hooks": [

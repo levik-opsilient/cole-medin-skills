@@ -79,6 +79,26 @@ def _is_template(path: str) -> bool:
     return path.endswith(ENV_TEMPLATE_SUFFIXES)
 
 
+def _normalize(command: str) -> str:
+    """Collapse the cheap ways of spelling the same command.
+
+    A shell does not care whether the filename is bare, single-quoted,
+    double-quoted, or split across two adjacent quoted fragments - it resolves
+    all of them to the same path. A naive regex sees four different strings.
+    Stripping quote characters and collapsing whitespace folds them back
+    together before matching.
+
+    Measured: without this, the split-quote spelling walked straight through
+    this guard, while an unrelated guard on the same machine caught it. Cheap
+    to close, and that spelling has no innocent explanation.
+
+    Not a general defence. A command that BUILDS the path at runtime out of
+    character codes is arbitrary code, and no string match reaches it. That gap
+    is real and is named in the README rather than papered over.
+    """
+    return " ".join(command.replace("'", "").replace('"', "").split())
+
+
 def is_secret_access(tool_name: str, tool_input: dict) -> bool:
     """True if the call would reach a credential - by file OR by environment."""
     # File tools: check the path argument.
@@ -93,10 +113,15 @@ def is_secret_access(tool_name: str, tool_input: dict) -> bool:
 
     # Shell: the command may name a credential file OR dump the environment.
     if tool_name in ("Bash", "PowerShell"):
-        command = str(tool_input.get("command", "")).replace("\\", "/")
-        if any(p.search(command) for p in ENV_DUMP):
-            return True
-        return bool(SECRET_PATH.search(command)) and ".env.example" not in command
+        raw = str(tool_input.get("command", "")).replace("\\", "/")
+        # Check the command as written AND with quoting folded away, so a
+        # split-quote spelling of the same filename cannot slip past.
+        for command in (raw, _normalize(raw)):
+            if any(p.search(command) for p in ENV_DUMP):
+                return True
+            if SECRET_PATH.search(command) and ".env.example" not in command:
+                return True
+        return False
 
     return False
 

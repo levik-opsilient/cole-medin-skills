@@ -84,7 +84,7 @@ For `stop_tests_must_pass.py` you must check **both** directions: exit 0 while t
 you deliberately break a test. If it exits 2 in both states your test command is not resolving — see the venv
 note below, which is the cause roughly every time.
 
-## The five things that will bite you
+## The six things that will bite you
 
 **1. The venv trap.** This is the one that wastes an afternoon. A hook runs under `uv run` in a throwaway
 environment that has none of your project's packages, and it is not your shell, so your project's `.venv` was
@@ -99,13 +99,20 @@ not what *you* hand it.
 **3. `additionalContext` must be nested.** It goes inside `hookSpecificOutput`, never at the top level. Put it
 at the top level and Claude Code silently ignores it. No error, no warning, it just does not arrive.
 
-**4. Hooks run in a non-interactive shell.** No `~/.zshrc`, no `~/.bashrc`. A tool that is only on `PATH`
+**4. Exit code 1 does not block. Exit code 2 does.** This is backwards from every other CLI you use, where 1
+means failure. In a hook, 1 is a non-blocking error: it is logged and the agent carries straight on. Only 2
+blocks, and only on events that can block at all. Get it the wrong way round and you believe you are protected
+when you are not, with nothing on screen to tell you otherwise.
+
+**5. A `Stop` hook without a loop guard will spin.** It blocks the stop, the agent works, tries to stop, gets
+blocked again. Claude Code caps this at **eight consecutive blocks** and then overrides the hook and ends the
+turn with a warning, so it is a bounded spin rather than a true infinite loop, but you have still burned eight
+turns going nowhere. Read `stop_hook_active` from the payload and stand down when it is true. Both `Stop` hooks
+here do.
+
+**6. Hooks run in a non-interactive shell.** No `~/.zshrc`, no `~/.bashrc`. A tool that is only on `PATH`
 because of your shell profile works when you test by hand and fails when the hook runs it. And if your profile
 prints anything at startup, that text mixes into the hook's stdout and breaks JSON parsing.
-
-**5. A `Stop` hook without a loop guard is an infinite loop.** It blocks the stop, the agent works, tries to
-stop, gets blocked again, forever. Check `stop_hook_active` and stand down when it is true. Both `Stop` hooks
-here do.
 
 Debugging: `claude --debug` shows hook execution, and `CLAUDE_CODE_DEBUG_LOG_LEVEL=verbose` shows matcher
 counts, which answers "did my matcher actually match."
