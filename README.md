@@ -193,7 +193,7 @@ cp hooks/*.py .claude/hooks/
 cp hooks/settings.json.example .claude/settings.json   # or merge the "hooks" block
 ```
 
-Unlike a skill, **a hook does something the moment it exists** — so read them before you wire them, set
+Unlike a skill, **a hook does something the moment it exists** - so read them before you wire them, set
 `TEST_COMMAND` in the stop hook, and check both directions (exit 0 on green, exit 2 on red) before you trust it.
 [`hooks/README.md`](hooks/README.md) covers the five failure modes that waste an afternoon, the venv trap chief
 among them.

@@ -81,7 +81,7 @@ echo '{"session_id":"t","cwd":".","tool_name":"Read","tool_input":{"file_path":"
 ```
 
 For `stop_tests_must_pass.py` you must check **both** directions: exit 0 while the suite is green, exit 2 once
-you deliberately break a test. If it exits 2 in both states your test command is not resolving — see the venv
+you deliberately break a test. If it exits 2 in both states your test command is not resolving - see the venv
 note below, which is the cause roughly every time.
 
 ## The six things that will bite you
@@ -89,7 +89,7 @@ note below, which is the cause roughly every time.
 **1. The venv trap.** This is the one that wastes an afternoon. A hook runs under `uv run` in a throwaway
 environment that has none of your project's packages, and it is not your shell, so your project's `.venv` was
 never on `PATH` either. Strip uv's venv and `python` falls through to some global interpreter with the wrong
-packages. Either way the hook exits 2 on a green suite and blames an unrelated module — it looks like a real
+packages. Either way the hook exits 2 on a green suite and blames an unrelated module - it looks like a real
 failure. `stop_tests_must_pass.py` handles both halves in `_project_env()`; steal it.
 
 **2. `@file` mentions bypass PreToolUse entirely.** When you type `@config/secrets.yml` in your prompt, the file
@@ -136,12 +136,12 @@ Only some events honor a block: `PreToolUse`, `UserPromptSubmit`, `Stop`, `Subag
 Every hook here is a `command` hook, a script that gets JSON on stdin. There are four other handler types worth
 knowing about, configured the same way in `settings.json`:
 
-- **`prompt`** — send the event to a fast model and get an allow/deny back. For judgments a regex cannot make
+- **`prompt`** - send the event to a fast model and get an allow/deny back. For judgments a regex cannot make
   ("does this commit message describe what actually changed?").
-- **`agent`** — spawn a subagent with real tools that can read the codebase before deciding. Expensive and
+- **`agent`** - spawn a subagent with real tools that can read the codebase before deciding. Expensive and
   slow; reserve it for gates worth a minute.
-- **`http`** — POST the event to a server. This is how you enforce one policy across a whole org from one place.
-- **`mcp_tool`** — call a tool on an MCP server you already have connected.
+- **`http`** - POST the event to a server. This is how you enforce one policy across a whole org from one place.
+- **`mcp_tool`** - call a tool on an MCP server you already have connected.
 
 Command hooks are still the right default: they are instant, free, and you can read them.
 
