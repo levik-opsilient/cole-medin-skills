@@ -117,7 +117,7 @@ python scripts/screenctl.py <action> [args]
 |---|---|---|
 | `doctor` | `[--out probe.png]` | Binaries, permissions, DPI, clipboard, and a real capture. Run first |
 | `list` | | Every visible window as `id<TAB>geometry<TAB>title`, minimized ones flagged |
-| `find` | `--title` | Resolves to one window and prints its geometry, or exits 1 |
+| `find` | `--title`\|`--id` | Resolves to one window and prints its geometry, or exits 1 |
 | `focus` | `--title` | Restores, foregrounds, then proves it by window identity |
 | `shot` | `--title --out [--max-width 1280]` | Foregrounds first, then captures the window only |
 | `type` | `--title --text` | Refuses newlines. No Enter sent |
@@ -130,6 +130,20 @@ python scripts/screenctl.py <action> [args]
 atomic operation; typing is a stream of synthetic keystrokes that a busy
 application can drop or reorder. `paste` borrows the clipboard and puts back what
 was there.
+
+That is not theoretical. Typing `test+^%~(){}[] 123` into Windows 11 Notepad
+produced `test+^%~(333333333` on one run and dropped the brackets entirely on
+another, while the same string typed into a terminal arrived perfectly, and
+pasting it into Notepad arrived perfectly. Terminals and plain input boxes take
+typed input fine. Rich editors with a formatting layer mangle it, differently
+each time. Paste into anything that is not a terminal.
+
+**Target by `--id` when a title will not hold still.** An application can rename
+its own window mid-run: a terminal launched as `DRIVE-TEST` became `claude` the
+moment a session started in it, then `Claude Code`, then the session's own
+summary of what it was doing. Take the handle from `list` once and use it
+throughout. Handles do not survive the window closing, which is why titles remain
+the default.
 
 **`type` and `paste` never press Enter.** Sending text and submitting it are
 separate steps so you can screenshot in between and confirm the right thing is
@@ -161,12 +175,16 @@ python scripts/session_watch.py <cmd> --repo <path-of-the-driven-session>
 | `last` | Last assistant text, verbatim |
 | `reads --match X` | Every file the agent touched, filtered. Add `--all` for subagents |
 
-`wait` distinguishes **finished** from **blocked at a permission prompt**, which
-look identical from outside. It exits 0 when a turn completes and 2 when the
-transcript has gone quiet with a tool call still unanswered, naming the tool. Never
-send an approval keystroke on a stall you have not identified this way; the older
-habit of assuming a stall means a prompt is how an approval gets typed into a
-session that already finished.
+`wait` exits 0 when the turn closes and 2 when it goes quiet with the turn still
+open. That second state is a permission prompt, a slow command, or thinking.
+
+**The transcript cannot tell you which**, and this is worth knowing before you
+build on it. Records are flushed asynchronously and the flush lags the
+conversation. Watching a live prompt twice on the same version produced two
+different transcripts: once an unanswered tool_use naming the exact command, once
+nothing at all, with the tool_use appearing only after approval. Same screen, two
+shapes. So an unanswered tool_use is a hint about what is being asked, never proof
+of what state the session is in. Screenshot before answering anything.
 
 `reads` is how you audit a driven agent instead of trusting it. For a memory or
 recall demo, `--match CLAUDE.md` settles whether the agent answered from context or
