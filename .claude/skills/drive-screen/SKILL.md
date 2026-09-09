@@ -13,6 +13,7 @@ mechanical work on all three operating systems.
 |---|---|
 | `scripts/screenctl.py` | Window discovery, focus, typing, pasting, keys, clicks, scrolling, screenshots |
 | `scripts/session_watch.py` | Reads a driven Claude Code session's transcript: is it done, what did it say, what did it touch |
+| `scripts/autodrive.py` | Runs a driven session to the end of a turn, answering its permission prompts and stopping on anything that needs a human |
 
 Run `python scripts/screenctl.py doctor` once on a new machine before anything
 else. It reports the missing binary or the ungranted permission that would
@@ -170,6 +171,42 @@ session that already finished.
 `reads` is how you audit a driven agent instead of trusting it. For a memory or
 recall demo, `--match CLAUDE.md` settles whether the agent answered from context or
 quietly re-read the file. If it re-read it, the round is void: say so and re-run.
+
+## autodrive.py
+
+Answers the driven session's own permission prompts so a long turn can run while
+nobody is watching. It answers prompts inside that session's terminal UI, and
+cannot answer an operating-system dialog.
+
+```bash
+python scripts/autodrive.py --title "<window>" --repo <path> [--dry-run]
+```
+
+Start with `--dry-run` on any new task. It reports the first prompt and the exact
+command behind it, then stops without sending anything.
+
+Three things make it safe enough to leave alone, and all three are the reason the
+obvious version of this script is not safe:
+
+- **It never infers a prompt from silence.** It approves only when the transcript
+  shows a tool call with no result, so it knows a prompt exists and knows the
+  command behind it. Silence alone is a finished turn just as often.
+- **It presses Enter, never a digit.** Enter takes the highlighted option, which
+  is approve-once. The digit variant means stop asking, and for a Bash command
+  that writes a permanent rule into the repository's settings file.
+- **It refuses a list of commands outright** and hands back with the command
+  printed: recursive deletes, force pushes, hard resets, `sudo`, piping the
+  network into a shell, publishing, formatting, killing processes, destructive
+  SQL. Not a security boundary, since any regex can be spelled around. It is the
+  short list of things worth never approving while away.
+
+It also stops if an approval produces no new transcript records, because a
+keystroke that is not landing never starts landing by being repeated. Exit 0 is a
+completed turn, 2 is approvals not reaching the session, 3 is a deliberate stop
+for a human. Pass `--shot-dir` to keep a screenshot of every prompt it answered.
+
+`python scripts/_test_autodrive.py` checks the refuse list and the pending-call
+detection. Run it after editing either.
 
 For launching and steering sessions, terminal choices, and the editor-specific
 details, read [references/driving-agents.md](references/driving-agents.md).

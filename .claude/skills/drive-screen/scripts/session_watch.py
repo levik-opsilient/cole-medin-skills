@@ -192,6 +192,32 @@ def pending_tool_calls(recs: list[dict]) -> list[str]:
     return [name for tid, name in issued.items() if tid not in answered]
 
 
+def pending_tool_details(recs: list[dict]) -> list[tuple[str, str]]:
+    """(tool, what it actually wants to do) for every unanswered tool call.
+
+    `pending_tool_calls` answers "is it blocked". This answers "on what", which
+    is the part a human needs before approving anything. Reading the real command
+    out of the transcript is the difference between an audit trail and a
+    click-through: the old loop printed the last thing in the transcript and
+    called it the pending call, which is not the same thing at all.
+    """
+    issued: dict[str, tuple[str, str]] = {}
+    answered: set[str] = set()
+    for d in recs:
+        for c in _content(d):
+            if not isinstance(c, dict):
+                continue
+            if c.get("type") == "tool_use" and c.get("id"):
+                inp = c.get("input", {}) or {}
+                detail = (inp.get("command") or inp.get("file_path")
+                          or inp.get("path") or inp.get("pattern")
+                          or inp.get("url") or "")
+                issued[c["id"]] = (c.get("name", "?"), str(detail))
+            elif c.get("type") == "tool_result" and c.get("tool_use_id"):
+                answered.add(c["tool_use_id"])
+    return [v for k, v in issued.items() if k not in answered]
+
+
 def tool_reads(recs: list[dict], start: int) -> list[tuple[str, str]]:
     hits = []
     for d in recs[start:]:
