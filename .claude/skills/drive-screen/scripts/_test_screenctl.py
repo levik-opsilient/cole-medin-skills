@@ -207,6 +207,19 @@ if sc.OS == "Windows":
     # quotes is command substitution in most shells.
     check("backtick is VK_OEM_3", sc.VK["backtick"], 0xC0)
 
+    # wScan is 16 bits and carries a UTF-16 code unit. Passing a code point
+    # straight in truncates every astral character: a rocket (U+1F680) arrived
+    # as U+F680, a private-use glyph, with no error. BMP characters have one
+    # unit and always worked, which is why it went unnoticed.
+    check("BMP character is one unit", sc._utf16_units("é"), [0xE9])
+    check("CJK is one unit", sc._utf16_units("日"), [0x65E5])
+    check("astral character is a surrogate PAIR", sc._utf16_units("🚀"),
+          [0xD83D, 0xDE80])
+    for u in sc._utf16_units("🚀") + sc._utf16_units("★"):
+        CHECKS += 1
+        if not 0 <= u <= 0xFFFF:
+            FAILURES.append(f"code unit {u:#x} does not fit in a 16-bit wScan")
+
 
 # --------------------------------------------------------------------------
 # All three backends must expose the same API

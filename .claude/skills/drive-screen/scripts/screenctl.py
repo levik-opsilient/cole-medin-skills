@@ -86,6 +86,20 @@ def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True, **kw)
 
 
+def run_utf8(cmd: list[str], **kw) -> str:
+    """Run a command and decode its stdout as UTF-8, whatever the locale says.
+
+    `text=True` decodes with the LOCALE encoding. For clipboard contents that is
+    silently destructive: measured live on Windows, reading a clipboard holding
+    'cafe ★ rocket' through locale decoding returned mojibake for the accent and
+    '?' for everything unmappable. Since the clipboard is READ in order to put
+    the user's own clipboard back afterwards, that turns a borrowed clipboard
+    into a corrupted one.
+    """
+    return subprocess.run(cmd, capture_output=True, **kw).stdout.decode(
+        "utf-8", "replace")
+
+
 def need(binary: str, install: str) -> str:
     p = shutil.which(binary)
     if not p:
@@ -292,10 +306,23 @@ if OS == "Windows":
         i.u.ki = _KEYBDINPUT(vk, 0, _KEYUP if up else 0, 0, None)
         return i
 
-    def _char_ev(ch: str, up: bool):
+    def _char_ev(unit: int, up: bool):
+        # wScan is a WORD. It carries a UTF-16 CODE UNIT, not a code point.
         i = _INPUT(type=1)
-        i.u.ki = _KEYBDINPUT(0, ord(ch), _UNICODE | (_KEYUP if up else 0), 0, None)
+        i.u.ki = _KEYBDINPUT(0, unit, _UNICODE | (_KEYUP if up else 0), 0, None)
         return i
+
+    def _utf16_units(ch: str) -> list[int]:
+        """The UTF-16 code units of one character: two for anything astral.
+
+        Passing ord(ch) straight into the 16-bit wScan field silently truncates
+        every character above U+FFFF. Measured live: typing a rocket (U+1F680)
+        delivered U+F680, a private-use glyph, with no error and no warning.
+        Everything in the Basic Multilingual Plane - accents, CJK, symbols - has
+        one unit and was always fine, which is exactly why this survived.
+        """
+        b = ch.encode("utf-16-le")
+        return [int.from_bytes(b[i:i + 2], "little") for i in range(0, len(b), 2)]
 
     def type_text(text: str, delay: float = 0.012) -> None:
         # One character per SendInput call, with a delay between them.
@@ -311,7 +338,14 @@ if OS == "Windows":
         # 12ms matches what xdotool defaults to and what Anthropic's own
         # computer-use reference implementation uses, for the same reason.
         for ch in text:
-            _send([_char_ev(ch, False), _char_ev(ch, True)])
+            # A surrogate pair has to reach the application as two adjacent
+            # events or it is not composed back into one character, so the units
+            # of a single character go out together. That is at most four events
+            # per call, well inside what the corruption above was about.
+            evs = []
+            for unit in _utf16_units(ch):
+                evs += [_char_ev(unit, False), _char_ev(unit, True)]
+            _send(evs)
             time.sleep(delay)
 
     def send_chord(keys: str) -> None:
@@ -339,11 +373,38 @@ if OS == "Windows":
             if i == 0 and double:
                 time.sleep(0.05)
 
-    def scroll(amount: int) -> None:
+    def scroll(win: Win, amount: int) -> None:
+        # The wheel goes to the window under the POINTER, not to the focused
+        # window. Focusing alone is not enough, and the failure is silent and
+        # doubly wrong: the target does not move, and whatever the mouse happens
+        # to be sitting over scrolls instead. Measured live, a scroll aimed at a
+        # text window went to a window on a different monitor.
+        user32.SetCursorPos(win.x + win.w // 2, win.y + win.h // 2)
+        time.sleep(0.05)
         user32.mouse_event(0x0800, 0, 0, int(amount) * 120, 0)   # WHEEL
 
     def get_clipboard() -> str:
-        return run(["powershell.exe", "-NoProfile", "-Command", "Get-Clipboard -Raw"]).stdout
+        # Deliberately NOT through stdout. PowerShell writes stdout in the
+        # console code page and Python decodes it with the locale encoding, so
+        # every non-ASCII character comes back wrong: 'cafe' with an acute e
+        # became 'caf,' and a star became '?'. That made `paste` refuse valid
+        # payloads, and - far worse - made the restore step write mojibake back
+        # over whatever the user actually had on their clipboard.
+        # A file carries the encoding explicitly and has no console in the path.
+        fd, path = tempfile.mkstemp(suffix=".txt")
+        os.close(fd)
+        try:
+            run(["powershell.exe", "-NoProfile", "-Command",
+                 f"Get-Clipboard -Raw | "
+                 f"Set-Content -LiteralPath '{path}' -Encoding UTF8 -NoNewline"])
+            # Windows PowerShell 5.1 writes a BOM with -Encoding UTF8.
+            with open(path, encoding="utf-8-sig") as f:
+                return f.read()
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
     def set_clipboard(text: str) -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
@@ -501,16 +562,20 @@ elif OS == "Darwin":
         run([cli, f"{'dc' if double else ('rc' if button == 'right' else 'c')}:"
                   f"{int(x)},{int(y)}"])
 
-    def scroll(amount: int) -> None:
+    def scroll(win: Win, amount: int) -> None:
         # cliclick has no wheel verb, so page keys stand in. Documented rather
-        # than silently approximated.
+        # than silently approximated. `win` is unused because this is a
+        # KEYSTROKE: it follows focus and needs no pointer positioning, which is
+        # why this backend never had the wheel-goes-to-the-pointer bug.
         send_chord("pageup" if amount > 0 else "pagedown")
 
     def get_clipboard() -> str:
-        return run(["pbpaste"]).stdout
+        # UTF-8 explicitly: locale decoding mangles every non-ASCII character,
+        # and this value is written BACK to the user's clipboard afterwards.
+        return run_utf8(["pbpaste"])
 
     def set_clipboard(text: str) -> None:
-        subprocess.run(["pbcopy"], input=text, text=True, check=True)
+        subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=True)
 
     PASTE_CHORD = "cmd+v"
 
@@ -614,8 +679,11 @@ else:
         run([xdo, "click", "--repeat", "2" if double else "1",
              "3" if button == "right" else "1"])
 
-    def scroll(amount: int) -> None:
+    def scroll(win: Win, amount: int) -> None:
         xdo = need("xdotool", "sudo apt install xdotool")
+        # Buttons 4 and 5 are delivered to the window under the POINTER, so the
+        # pointer has to be over the target first or the scroll lands elsewhere.
+        run([xdo, "mousemove", str(win.x + win.w // 2), str(win.y + win.h // 2)])
         run([xdo, "click", "--repeat", str(max(1, abs(int(amount)))),
              "4" if amount > 0 else "5"])
 
@@ -628,13 +696,15 @@ else:
         # default is PRIMARY (middle-click), not the one Ctrl+V reads.
         args = ([t, "-selection", "clipboard", "-o"] if t.endswith("xclip")
                 else [t, "--clipboard", "--output"])
-        return run(args).stdout
+        # UTF-8 explicitly: under LANG=C locale decoding would corrupt this, and
+        # it is written BACK to the user's clipboard afterwards.
+        return run_utf8(args)
 
     def set_clipboard(text: str) -> None:
         t = _clip()
         args = ([t, "-selection", "clipboard"] if t.endswith("xclip")
                 else [t, "--clipboard", "--input"])
-        subprocess.run(args, input=text, text=True, check=True)
+        subprocess.run(args, input=text.encode("utf-8"), check=True)
 
     PASTE_CHORD = "ctrl+v"
 
@@ -687,7 +757,13 @@ def resolve(title: str, wid: str | None = None) -> Win:
     if len(hits) > 1:
         die("AMBIGUOUS", f"{title!r} matches {len(hits)} visible windows. Refusing.",
             [w.line() for w in hits] +
-            ["Pass a longer --title that matches exactly one."])
+            ["Pass a longer --title that matches exactly one, or pass --id with",
+             "the handle from the first column above.",
+             # Two windows of the same app routinely carry the SAME title, and
+             # then no title is long enough to separate them. Suggesting only a
+             # longer title sends the caller looking for something that does not
+             # exist.
+             "--id is the only way to separate windows whose titles are equal."])
     return hits[0]
 
 
@@ -724,6 +800,43 @@ def focus(title: str, settle: float = 0.45, wid: str | None = None) -> Win:
     raise AssertionError("unreachable")
 
 
+# How many characters go out between focus re-checks while typing.
+#
+# On Windows the check is GetForegroundWindow(), an in-process call costing
+# microseconds against a 12ms per-character delay, so it runs before EVERY
+# character and the guarantee is exact: no character is sent without focus
+# having just been confirmed.
+#
+# macOS and Linux resolve the foreground by spawning osascript or xdotool, tens
+# of milliseconds each, so checking per character would cost more than the
+# typing. They check every 20 characters instead, which bounds the exposure at
+# roughly a quarter-second of input rather than eliminating it. `paste` has no
+# such window on any platform: it is one atomic operation.
+TYPE_CHUNK = 1 if OS == "Windows" else 20
+
+
+def _die_focus_lost(sent: int, total: int) -> None:
+    fg = next((w for w in list_windows() if w.id == foreground_id()), None)
+    where = f"{(fg.title if fg else 'unknown')!r}"
+    # Be precise about what is known. Claiming all `sent` characters landed is
+    # the same species of error this guard exists to prevent: on a platform that
+    # checks per chunk, focus can move partway THROUGH a chunk, and measured
+    # live that lost 9 characters of a 20-character chunk.
+    if TYPE_CHUNK == 1:
+        landed = [f"All {sent} characters sent reached the target; each one was",
+                  "sent with focus confirmed immediately beforehand."]
+    else:
+        landed = [f"Of the {sent} characters sent, up to the last {TYPE_CHUNK} may",
+                  "NOT have reached the target: focus moved during that chunk."]
+    die("FOCUS_LOST_MIDSEND",
+        f"sent {sent} of {total} characters, then the foreground became {where}.",
+        landed +
+        [f"The remaining {total - sent} were not sent anywhere.",
+         "Screenshot before retrying: re-sending the whole string would",
+         "duplicate whatever already landed.",
+         "For anything this long, prefer `paste`: it is one atomic operation."])
+
+
 def act_shot(a) -> None:
     win = focus(a.title, wid=a.id)
     time.sleep(a.settle)      # let the UI settle before capturing it
@@ -754,9 +867,34 @@ def act_type(a) -> None:
             ["In a full-screen terminal UI a newline SUBMITS, so the first line",
              "would be sent as a prompt and the rest typed into whatever follows.",
              "Use `paste` for anything multi-line."])
-    focus(a.title, wid=a.id)
-    type_text(a.text)
+    win = focus(a.title, wid=a.id)
+
+    # Focus is checked once, before the send. That check goes STALE while a long
+    # string is still going out, because typing is a stream of separate events
+    # and each one lands wherever the foreground is at that instant.
+    #
+    # Measured live: a 200-character send with a window stealing focus 1.5s in
+    # delivered 92 characters to the target, sent the other 108 somewhere else,
+    # and still printed "TYPED 200 chars" and exited 0. A wrong answer reported
+    # as success is the worst failure this tool can have, so re-verify between
+    # chunks and stop at the first loss.
+    #
+    # Chunking here rather than inside each backend keeps all three platforms
+    # identical and keeps the backend API the same.
+    chunks = [a.text[i:i + TYPE_CHUNK] for i in range(0, len(a.text), TYPE_CHUNK)]
+    sent = 0
+    for n, piece in enumerate(chunks):
+        if n and not same_window(win):
+            _die_focus_lost(sent, len(a.text))
+        type_text(piece)
+        sent += len(piece)
+
     time.sleep(0.25)
+    # The last chunk is unverified until now, so the success line below would
+    # otherwise be a claim about events nobody confirmed arrived.
+    if not same_window(win):
+        _die_focus_lost(sent, len(a.text))
+
     log(f"TYPE {len(a.text)} chars into {a.title!r}")
     print(f"TYPED {len(a.text)} chars (no Enter sent)")
 
@@ -861,10 +999,18 @@ def act_doctor(a) -> None:
 
     try:
         before = get_clipboard()
-        set_clipboard("screenctl-doctor")
-        rt = get_clipboard().strip() == "screenctl-doctor"
+        # Non-ASCII on purpose. An ASCII-only probe passed on a machine where
+        # every accented character came back mangled and every symbol came back
+        # as '?', because the clipboard was being read through locale decoding.
+        # That made `paste` refuse valid payloads and, worse, made the restore
+        # step write mojibake over the user's own clipboard. An ASCII probe
+        # cannot see any of it. Astral characters are included because they are
+        # a surrogate pair and exercise a different path again.
+        probe = "screenctl-doctor café ★ 日本語 \U0001F680"
+        set_clipboard(probe)
+        rt = get_clipboard().strip() == probe
         set_clipboard(before)
-        print(f"clipboard_roundtrip: {'ok' if rt else 'FAILED'}")
+        print(f"clipboard_roundtrip: {'ok' if rt else 'FAILED (non-ASCII is corrupted)'}")
         ok &= rt
     except Exception as e:
         print(f"clipboard_roundtrip: FAILED ({e})")
@@ -955,8 +1101,8 @@ def main() -> int:
             die("NO_COORDS", "--x and --y are required for click")
         act_click(a)
     elif a.action == "scroll":
-        focus(a.title, wid=a.id)
-        scroll(a.amount)
+        win = focus(a.title, wid=a.id)
+        scroll(win, a.amount)
         log(f"SCROLL {a.amount} in {a.title!r}")
         print(f"SCROLLED {a.amount}")
     return 0

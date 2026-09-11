@@ -124,7 +124,7 @@ python scripts/screenctl.py <action> [args]
 | `paste` | `--title` + `--file`\|`--text` | Clipboard, verified, then restored. No Enter sent |
 | `key` | `--title --keys` | Named keys and chords: `enter`, `esc`, `ctrl+shift+p`, `cmd+v` |
 | `click` | `--title --x --y [--double\|--right]` | Screen coordinates. See the mapping note below |
-| `scroll` | `--title --amount` | Positive scrolls up |
+| `scroll` | `--title --amount` | Positive scrolls up. Moves the pointer onto the window first: a wheel event goes to whatever is under the mouse, not to the focused window |
 
 **Use `paste`, not `type`, for anything that must arrive verbatim.** Pasting is one
 atomic operation; typing is a stream of synthetic keystrokes that a busy
@@ -144,6 +144,15 @@ moment a session started in it, then `Claude Code`, then the session's own
 summary of what it was doing. Take the handle from `list` once and use it
 throughout. Handles do not survive the window closing, which is why titles remain
 the default.
+
+**A long `type` is not atomic, and the tool now says so.** Focus is confirmed
+before every character on Windows, and every 20 characters on macOS and Linux. If
+focus moves mid-string the send stops with `FOCUS_LOST_MIDSEND` and reports how
+many characters actually landed, instead of reporting success for keystrokes that
+went somewhere else. Measured live before this existed: a 200-character send lost
+108 characters to a window that stole focus, and still printed `TYPED 200 chars`.
+Typing costs about 15ms per character, so 500 characters is eight seconds against
+under three for a 57,000-character `paste`. Use `paste`.
 
 **`type` and `paste` never press Enter.** Sending text and submitting it are
 separate steps so you can screenshot in between and confirm the right thing is
@@ -267,13 +276,33 @@ six live sessions at once. Switch terminals with `Ctrl+PageUp`/`Ctrl+PageDown`,
 which never focuses the list. Sessions survive on disk either way and come back
 with `claude --resume <uuid>`, but the terminals do not.
 
+**6. `key --keys win` opens something this tool cannot close.** The Start menu is
+a `CoreWindow`: it does not appear in `list`, so no action can target it, and
+every action focuses a named window first, which is not how you dismiss it. The
+machine is then stuck behind an open Start menu. There is almost never a reason
+to press it - launch things with `start`, `code`, `open` or `wt.exe` instead.
+
+**7. An always-on-top window is in your screenshot and takes your clicks.** A
+capture is a grab of that screen region, not of the window's own content, so an
+overlay sitting on top of the target appears in the image. Focusing the target
+does not push a topmost window behind it. This is the right trade-off and worth
+understanding: the screenshot shows exactly what a click at those coordinates
+will hit. Measured live, a click computed from such an image landed in the
+overlay and the target recorded nothing. Notice the overlay in the image rather
+than trusting the geometry.
+
+**8. A window hanging off the edge of the desktop captures blank there.** Same
+cause. The off-screen part of the image is not the window's content, it is
+whatever the compositor had. Move the window fully on-screen before reading it.
+
 ## When it goes wrong
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | Text landed in the wrong place | Focus stolen mid-run | Screenshot, send `esc`, re-focus, retry. Do not blind-send more keys |
-| `AMBIGUOUS` | Title matches several windows | Longer title |
+| `AMBIGUOUS` | Title matches several windows | Longer title, or `--id`. Two windows of one app often share a title exactly, and then only `--id` can separate them |
 | `FOCUS_FAILED` | Another app holds the foreground | Retry once; if it is fullscreen, ask the user to close it |
+| `FOCUS_LOST_MIDSEND` | Focus moved while a long `type` was still going out | The message says how many characters landed. Screenshot before retrying: re-sending the whole string duplicates the part that arrived. Prefer `paste` |
 | `CLIPBOARD_MISMATCH` | Clipboard write failed | Retry. Nothing was pasted |
 | Garbled typed text | `type` used for special characters | Use `paste` |
 | Screenshot is one flat colour | On macOS, Screen Recording not granted | `doctor` says so. Grant it to the terminal app, not to python |
