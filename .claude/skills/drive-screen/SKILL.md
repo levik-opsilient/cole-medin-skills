@@ -215,22 +215,40 @@ command behind it, then stops without sending anything.
 Three things make it safe enough to leave alone, and all three are the reason the
 obvious version of this script is not safe:
 
-- **It never infers a prompt from silence.** It approves only when the transcript
-  shows a tool call with no result, so it knows a prompt exists and knows the
-  command behind it. Silence alone is a finished turn just as often.
+- **It stops for a human by default and screenshots what it stopped on.** This is
+  the protection. Everything below is secondary to it.
 - **It presses Enter, never a digit.** Enter takes the highlighted option, which
   is approve-once. The digit variant means stop asking, and for a Bash command
   that writes a permanent rule into the repository's settings file.
-- **It refuses a list of commands outright** and hands back with the command
-  printed: recursive deletes, force pushes, hard resets, `sudo`, piping the
-  network into a shell, publishing, formatting, killing processes, destructive
-  SQL. Not a security boundary, since any regex can be spelled around. It is the
-  short list of things worth never approving while away.
+- **It refuses a list of commands** and hands back with the command printed:
+  recursive deletes, force pushes, hard resets, `sudo`, piping the network into a
+  shell, publishing, formatting, killing processes, destructive SQL.
+
+**Do not rely on that refuse list, and understand why.** A pending permission
+prompt is usually not in the transcript yet. Measured live against a real
+`rm -rf` prompt sitting on screen: 36 records, two completed `ls` calls, and no
+record of the command being asked about. Approving it took the file to 44 records
+and the `rm -rf` appeared then. **The command is generally written only after it
+is approved.** Across six live prompts in one session the command was readable
+for three of them: it is a race, not a rule, and you cannot tell which case you
+are in. The one prompt this list most exists for, the `rm -rf`, was among the
+invisible ones.
+
+Two consequences, both worth stating plainly. The refuse list is a second line
+that often cannot see the thing it is filtering. And `autodrive` without
+`--approve-blind` will mostly just stop, because the tool call it wants to read
+is not there - which is the safe outcome, and is why the screenshot exists.
+
+`--approve-blind` is therefore the flag that actually runs a turn unattended, and
+it is exactly what it says: **Enter on whatever is on screen, unread**. It works
+(verified live through a three-approval task), and it is only appropriate for a
+task whose worst case you have already accepted. Use `--shot-dir` with it so
+there is a record of what was approved.
 
 It also stops if an approval produces no new transcript records, because a
 keystroke that is not landing never starts landing by being repeated. Exit 0 is a
-completed turn, 2 is approvals not reaching the session, 3 is a deliberate stop
-for a human. Pass `--shot-dir` to keep a screenshot of every prompt it answered.
+completed turn, 2 is approvals not reaching the session or the prompt not being
+photographable, 3 is a deliberate stop for a human. Pass `--shot-dir` to keep a screenshot of every prompt it answered.
 
 `python scripts/_test_autodrive.py` checks the refuse list and the pending-call
 detection. Run it after editing either.

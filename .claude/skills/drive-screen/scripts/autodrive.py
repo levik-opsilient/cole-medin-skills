@@ -41,7 +41,8 @@ settings, unattended, which is not a thing to do while nobody is watching.
 Exit codes
   0  the turn completed
   1  timed out with the agent still working
-  2  approvals are not reaching the session, or the cap was hit
+  2  approvals are not reaching the session, the prompt could not be
+     photographed, or the cap was hit
   3  stopped deliberately for a human: a prompt is waiting and needs reading,
      a command matched the refuse list, or --dry-run
 """
@@ -209,7 +210,19 @@ def main() -> int:
             d = a.shot_dir or os.path.join(HERE, "_prompts")
             os.makedirs(d, exist_ok=True)
             shot = os.path.join(d, f"prompt-{approvals + 1:02d}.png")
-            screenctl("shot", *_target(a), "--out", shot)
+            # The capture can fail - most often FOCUS_FAILED, which is exactly
+            # the situation where a human is about to be told "read this image".
+            # Naming a path that was never written is bad; naming one left over
+            # from an earlier prompt in the same --shot-dir is worse, because it
+            # looks valid and describes a different question. Say it failed.
+            before = os.path.getmtime(shot) if os.path.exists(shot) else None
+            rs = screenctl("shot", *_target(a), "--out", shot)
+            fresh = os.path.exists(shot) and os.path.getmtime(shot) != before
+            if rs.returncode != 0 or not fresh:
+                print("\nSCREENSHOT FAILED, so there is nothing to read:")
+                print("   ", (rs.stdout + rs.stderr).strip()[:300] or "no new file")
+                print("Refusing to approve something that cannot be seen.")
+                return 2
 
         print(f"\n--- quiet {int(idle)}s, turn still open "
               f"(records {len(recs)}, approvals so far {approvals}) ---")
