@@ -158,6 +158,23 @@ under three for a 57,000-character `paste`. Use `paste`.
 separate steps so you can screenshot in between and confirm the right thing is
 about to be submitted. This has saved more takes than any other single decision.
 
+**There is no `move` action, and arranging windows is a keyboard job.** Nothing
+here resizes or repositions a window directly, by design: dragging is the least
+reliable thing a screen driver can do. Use the window manager instead, in this
+order, because it is two steps and the order matters.
+
+| Goal | Send | Note |
+|---|---|---|
+| Put a window on another monitor | `win+shift+left` / `win+shift+right` | Moves it, and RESTORES its unsnapped size. Do this first |
+| Snap it within that monitor | `win+left` / `win+right` | Half the screen. `win+up` maximises |
+
+Verified live across three monitors: `win+shift+left` moved a terminal to the
+monitor at x=-1920, and a following `win+left` snapped it to that monitor's left
+half. Snapping first and moving second undoes the snap, which is why the order is
+written down. On macOS the equivalents are the window-tiling shortcuts, and on
+Linux they belong to the window manager, so neither is portable; check before
+relying on them off Windows.
+
 **Screenshot pixels are not screen coordinates.** `shot` captures the window, so
 the image origin is the window's top-left corner, and the image is usually scaled.
 Every `shot` prints `WINDOW_ORIGIN` and `IMAGE_SCALE` and the arithmetic to
@@ -195,9 +212,20 @@ nothing at all, with the tool_use appearing only after approval. Same screen, tw
 shapes. So an unanswered tool_use is a hint about what is being asked, never proof
 of what state the session is in. Screenshot before answering anything.
 
+**A completed turn is not a finished task.** If the driven agent dispatched a
+subagent, it can close the turn while that work is still running. Measured live:
+`wait` returned TURN_COMPLETE on a turn whose entire content was "Explore agent
+is running, I'll report back", and the actual answer arrived two turns later. So
+read the final message before acting on it. If it describes work in progress
+rather than a result, call `wait` again rather than treating exit 0 as done.
+
 `reads` is how you audit a driven agent instead of trusting it. For a memory or
 recall demo, `--match CLAUDE.md` settles whether the agent answered from context or
 quietly re-read the file. If it re-read it, the round is void: say so and re-run.
+
+Pass `--all` whenever the agent might have used a subagent, or the audit misses
+the work entirely: subagents write separate transcripts, and the parent's shows
+only that a Task was dispatched, not what it ran.
 
 ## autodrive.py
 

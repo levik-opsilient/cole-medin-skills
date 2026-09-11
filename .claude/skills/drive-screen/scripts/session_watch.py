@@ -395,8 +395,17 @@ def main() -> int:
         files = transcripts(a.repo) if a.all else [latest(a.repo)]
         hits = []
         for f in files:
-            tag = "  (subagent)" if "subagents" in f.parts else ""
-            hits += [(t, p + tag) for t, p in tool_reads(records(f), a.since)]
+            sub = "subagents" in f.parts
+            tag = "  (subagent)" if sub else ""
+            # --since is a record INDEX into the parent transcript. A subagent
+            # writes its own file with its own index space, where that number
+            # means nothing: applying it there skips most of a short transcript
+            # and reports NONE. Measured live, a subagent that had just run a
+            # find across the repo audited as having touched nothing, which is
+            # the most misleading answer this command can give. A subagent file
+            # is one dispatched task, so it is read whole and labelled.
+            start = 0 if sub else a.since
+            hits += [(t, p + tag) for t, p in tool_reads(records(f), start)]
         if a.match:
             hits = [h for h in hits if a.match.lower() in h[1].lower()]
         if not hits:
